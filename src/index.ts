@@ -8,7 +8,7 @@ dotenv.config();
 const config = {
   // 课程接口配置（需替换为实际选课系统的接口地址和参数）
   courseApi: process.env.COURSE_API || 'http://zhjw.scu.edu.cn/student/courseSelect/freeCourse/courseList', // 你的选课接口
-  courseName: process.env.COURSE_NAME || '计算机网络', // 要检测的课程名
+  courseNames: (process.env.COURSE_NAMES ? process.env.COURSE_NAMES.split(',') : ['计算机网络']), // 多个课程名，逗号分隔
   cookie: process.env.COOKIE || 'student.urpSoft.cn=aaaZ8dPHwO1Bhggo0bVLz', // 你的 Cookie（可选）
 
   // 邮箱配置（推荐用 QQ 邮箱，需开启 SMTP 并获取授权码）
@@ -18,19 +18,10 @@ const config = {
     to: process.env.EMAIL_TO || '2027595521@qq.com', // 收件人邮箱（可填自己）
   },
   checkInterval: Number(process.env.CHECK_INTERVAL) || 60 * 1000, // 检测间隔（默认60秒，单位毫秒）
-};
 
-const payload = new URLSearchParams({
-  kkxsh: '',
-  kch: '',
-  kcm: config.courseName,
-  skjs: '',
-  xq: '0',
-  jc: '0',
-  kclbdm: '',
-  vt: '',
-  fj: '0'
-}).toString();
+  maxInterval: Number(process.env.MAX_INTERVAL) || 120 * 1000, // 最大间隔（单位：毫秒，随机间隔检测时生效）
+  minInterval: Number(process.env.MIN_INTERVAL) || 30 * 1000, // 最小间隔（单位：毫秒，随机间隔检测时生效）
+};
 
 const headers = {
   'Accept': '*/*',
@@ -68,30 +59,38 @@ function log(msg: string, type: 'info' | 'error' = 'info') {
   }
 }
 
-async function fetchCourses() {
-	try {
-    log('开始请求课程数据...');
-    log(JSON.stringify(config));
-
-    const response = await axios.post(config.courseApi, payload, { headers });
-    const data = response.data;
-
-    if (!data || !data.rwRxkZlList) {
-      log('接口返回数据格式异常：', 'error');
-      return [];
+async function fetchCoursesMulti(courseNames: string[]) {
+  let allCourses: Course[] = [];
+  for (const name of courseNames) {
+    try {
+      log(`开始请求课程数据: ${name}`);
+      const payload = new URLSearchParams({
+        kkxsh: '',
+        kch: '',
+        kcm: name,
+        skjs: '',
+        xq: '0',
+        jc: '0',
+        kclbdm: '',
+        vt: '',
+        fj: '0'
+      }).toString();
+      const response = await axios.post(config.courseApi, payload, { headers });
+      const data = response.data;
+      if (!data || !data.rwRxkZlList) {
+        log(`接口返回数据格式异常: ${name}`, 'error');
+        continue;
+      }
+      log(`请求成功，开始处理数据: ${name}`);
+      const list = data.rwRxkZlList || [];
+      const courses: Course[] = list.map((item: any) => new Course(item.kcm, item.bkskyl, item.skjs))
+        .filter((course: Course) => course.quota > 0);
+      allCourses = allCourses.concat(courses);
+    } catch (error) {
+      log(`请求失败: ${name} - ` + error, 'error');
     }
-    else {
-      log('请求成功，开始处理数据...');
-    }
-
-    const list = response.data.rwRxkZlList || [];
-    const courses: Course[] = list.map((item: any) => new Course(item.kcm, item.bkskyl, item.skjs))
-      .filter((course: Course) => course.quota > 0); // 过滤出余量大于0的课程
-    return courses;
-	}
-	catch (error) {
-    log('请求失败：' + error, 'error');
-	}
+  }
+  return allCourses;
 }
 
 async function sendEmail(courses: Course[]) {
@@ -109,14 +108,14 @@ async function sendEmail(courses: Course[]) {
     const mailOptions = {
       from: `"选课提醒" <${config.email.from}>`, // 发件人名称+邮箱
       to: config.email.to, // 收件人邮箱（多个用逗号分隔）
-      subject: `【选课通知】${config.courseName} 有课余量啦！`, // 邮件主题
+      subject: `【选课通知】有课程有余量啦！`, // 邮件主题
       html: `
         <h3>课程余量检测结果</h3>
         ${courses.map(course => `
           <p>课程名：<span style="font-weight:bold">${course.name}</span></p>
           <p>教师：<span style="font-weight:bold">${course.teacher}</span></p>
           <p>当前余量：<span style="color:red; font-weight:bold">${course.quota}</span></p>
-        `).join('')}
+        `).join('<hr/>')}
         <p>请尽快登录选课系统操作！</p>
       `, // 邮件内容（支持 HTML）
     };
@@ -132,19 +131,18 @@ async function sendEmail(courses: Course[]) {
 }
 
 async function test(){
-  const courses = await fetchCourses();
-  log(JSON.stringify(courses));
+ 
 }
 
-const minInterval = Number(process.env.MIN_INTERVAL) || 30 * 1000; // 最小间隔30秒
-const maxInterval = Number(process.env.MAX_INTERVAL) || 120 * 1000; // 最大间隔120秒
+const minInterval = Number(config.minInterval) || 30 * 1000; // 最小间隔30秒
+const maxInterval = Number(config.maxInterval) || 120 * 1000; // 最大间隔120秒
 
 async function runRandomInterval() {
   log(`🚀 选课检测脚本已启动！查询间隔范围：${minInterval / 1000} ~ ${maxInterval / 1000} 秒`);
 
   async function check() {
     try {
-      const courses = await fetchCourses();
+      const courses = await fetchCoursesMulti(config.courseNames);
       if (courses && courses.length > 0) {
         log(`🎉 检测到课程有余量：${courses.map(c => `${c.name}(${c.quota})`).join(', \r\n')}`);
         const res = await sendEmail(courses);
@@ -173,7 +171,7 @@ function run() {
 
   const runOnce = async () => {
     try {
-      const courses = await fetchCourses();
+      const courses = await fetchCoursesMulti(config.courseNames);
     if (courses && courses.length > 0) {
       log(`🎉 检测到课程有余量：${courses.map(c => `${c.name}(${c.quota})`).join(', \r\n')}`);
       const res = await sendEmail(courses);
@@ -200,7 +198,7 @@ async function runFixedInterval() {
 
   const check = setInterval(async() => {
     try {
-      const courses = await fetchCourses();
+      const courses = await fetchCoursesMulti(config.courseNames);
       if (courses && courses.length > 0) {
         console.log(`🎉 检测到课程有余量：${courses.map(c => `${c.name}(${c.quota})`).join(', \r\n')}`);
         const res = await sendEmail(courses);
