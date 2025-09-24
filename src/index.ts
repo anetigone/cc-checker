@@ -165,29 +165,55 @@ async function runRandomInterval() {
   check();
 }
 
-async function run() {
-  log(`🚀 选课检测脚本已启动！查询间隔范围：${minInterval / 1000} ~ ${maxInterval / 1000} 秒`);
+let timer: NodeJS.Timeout | null = null;
 
-  while (true) {
+function run() {
+  const minInterval = Number(process.env.MIN_INTERVAL) || 30 * 1000;
+  const maxInterval = Number(process.env.MAX_INTERVAL) || 120 * 1000;
+
+  const runOnce = async () => {
+    try {
+      const courses = await fetchCourses();
+    if (courses && courses.length > 0) {
+      log(`🎉 检测到课程有余量：${courses.map(c => `${c.name}(${c.quota})`).join(', \r\n')}`);
+      const res = await sendEmail(courses);
+      if (res) {
+        log('邮件发送成功！');
+        return; // 检测到余量并发送邮件后停止
+      }
+    }
+  } catch (error) {
+    log('检测失败：' + error, 'error');
+  }
+
+  // 生成下次随机间隔
+  const nextInterval = Math.floor(Math.random() * (maxInterval - minInterval + 1)) + minInterval;
+  log(`下次查询将在 ${nextInterval / 1000} 秒后进行...`);
+    timer = setTimeout(runOnce, nextInterval);
+  };
+
+  runOnce();
+}
+
+async function runFixedInterval() {
+  console.log(`🚀 选课检测脚本已启动！检测间隔：${config.checkInterval / 1000} 秒`);
+
+  const check = setInterval(async() => {
     try {
       const courses = await fetchCourses();
       if (courses && courses.length > 0) {
-        log(`🎉 检测到课程有余量：${courses.map(c => `${c.name}(${c.quota})`).join(', \r\n')}`);
+        console.log(`🎉 检测到课程有余量：${courses.map(c => `${c.name}(${c.quota})`).join(', \r\n')}`);
         const res = await sendEmail(courses);
-        if (res) {
-          log('邮件发送成功！');
-          break; // 检测到余量并发送邮件后停止
+        if(res){
+          console.log('邮件发送成功！');
+          clearInterval(check); // 发送邮件后停止检测
         }
       }
-    } catch (error) {
-      log('检测失败：' + error, 'error');
     }
-
-    // 生成下次查询的随机间隔
-    const nextInterval = Math.floor(Math.random() * (maxInterval - minInterval + 1)) + minInterval;
-    log(`下次查询将在 ${nextInterval / 1000} 秒后进行...`);
-    await new Promise(resolve => setTimeout(resolve, nextInterval));
-  }
+    catch (error) {
+      console.error('检测失败：', error);
+    }
+  }, config.checkInterval);
 }
 
 // 替换原来的 run() 调用
