@@ -48,9 +48,11 @@ const headers = {
 class Course {
   name: string;
   quota: number;
-  constructor(name: string, quota: number) {
+  teacher: string;
+  constructor(name: string, quota: number, teacher?: string) {
     this.name = name;
     this.quota = quota;
+    this.teacher = teacher || '';
   }
 }
 
@@ -71,7 +73,7 @@ async function fetchCourses() {
     }
 
     const list = response.data.rwRxkZlList || [];
-    const courses: Course[] = list.map((item: any) => new Course(item.kcm, item.bkskyl))
+    const courses: Course[] = list.map((item: any) => new Course(item.kcm, item.bkskyl, item.skjs))
       .filter((course: Course) => course.quota > 0); // 过滤出余量大于0的课程
     return courses;
 	}
@@ -100,6 +102,7 @@ async function sendEmail(courses: Course[]) {
         <h3>课程余量检测结果</h3>
         ${courses.map(course => `
           <p>课程名：<span style="font-weight:bold">${course.name}</span></p>
+          <p>教师：<span style="font-weight:bold">${course.teacher}</span></p>
           <p>当前余量：<span style="color:red; font-weight:bold">${course.quota}</span></p>
         `).join('')}
         <p>请尽快登录选课系统操作！</p>
