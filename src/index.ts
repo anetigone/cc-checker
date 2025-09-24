@@ -1,6 +1,7 @@
 import axios from 'axios';
 import nodemailer from 'nodemailer';
 import dotenv from 'dotenv';
+import fs from 'fs';
 
 dotenv.config();
 
@@ -56,20 +57,31 @@ class Course {
   }
 }
 
+function log(msg: string, type: 'info' | 'error' = 'info') {
+  const time = new Date().toISOString();
+  const line = `[${time}] ${type === 'error' ? '[ERROR]' : ''} ${msg}\n`;
+  fs.appendFileSync('log.txt', line, { encoding: 'utf-8' });
+  if (type === 'error') {
+    console.error(msg);
+  } else {
+    console.log(msg);
+  }
+}
+
 async function fetchCourses() {
 	try {
-    console.log('开始请求课程数据...');
-    console.log(config);
+    log('开始请求课程数据...');
+    log(JSON.stringify(config));
 
     const response = await axios.post(config.courseApi, payload, { headers });
     const data = response.data;
 
     if (!data || !data.rwRxkZlList) {
-      console.error('接口返回数据格式异常：');
+      log('接口返回数据格式异常：', 'error');
       return [];
     }
     else {
-      console.log('请求成功，开始处理数据...');
+      log('请求成功，开始处理数据...');
     }
 
     const list = response.data.rwRxkZlList || [];
@@ -78,7 +90,7 @@ async function fetchCourses() {
     return courses;
 	}
 	catch (error) {
-	  console.error('请求失败：', error);
+    log('请求失败：' + error, 'error');
 	}
 }
 
@@ -110,39 +122,73 @@ async function sendEmail(courses: Course[]) {
     };
 
     await transporter.sendMail(mailOptions);
-    console.log('邮件发送成功！');
+    log('邮件发送成功！');
     return true;
 
   } catch (error) {
-    console.error('邮件发送失败：', error);
+    log('邮件发送失败：' + error, 'error');
     return false;
   }
 }
 
 async function test(){
   const courses = await fetchCourses();
-  console.log(courses);
+  log(JSON.stringify(courses));
 }
 
-async function run() {
-  console.log(`🚀 选课检测脚本已启动！检测间隔：${config.checkInterval / 1000} 秒`);
+const minInterval = Number(process.env.MIN_INTERVAL) || 30 * 1000; // 最小间隔30秒
+const maxInterval = Number(process.env.MAX_INTERVAL) || 120 * 1000; // 最大间隔120秒
 
-  const check = setInterval(async() => {
+async function runRandomInterval() {
+  log(`🚀 选课检测脚本已启动！查询间隔范围：${minInterval / 1000} ~ ${maxInterval / 1000} 秒`);
+
+  async function check() {
     try {
       const courses = await fetchCourses();
       if (courses && courses.length > 0) {
-        console.log(`🎉 检测到课程有余量：${courses.map(c => `${c.name}(${c.quota})`).join(', \r\n')}`);
+        log(`🎉 检测到课程有余量：${courses.map(c => `${c.name}(${c.quota})`).join(', \r\n')}`);
         const res = await sendEmail(courses);
-        if(res){
-          console.log('邮件发送成功！');
-          clearInterval(check); // 发送邮件后停止检测
+        if (res) {
+          log('邮件发送成功！');
+          return; // 检测到余量并发送邮件后停止
         }
       }
+    } catch (error) {
+      log('检测失败：' + error, 'error');
     }
-    catch (error) {
-      console.error('检测失败：', error);
-    }
-  }, config.checkInterval);
+    // 生成下次查询的随机间隔
+    const nextInterval = Math.floor(Math.random() * (maxInterval - minInterval + 1)) + minInterval;
+    log(`下次查询将在 ${nextInterval / 1000} 秒后进行...`);
+    setTimeout(check, nextInterval);
+  }
+
+  check();
 }
 
-run();
+async function run() {
+  log(`🚀 选课检测脚本已启动！查询间隔范围：${minInterval / 1000} ~ ${maxInterval / 1000} 秒`);
+
+  while (true) {
+    try {
+      const courses = await fetchCourses();
+      if (courses && courses.length > 0) {
+        log(`🎉 检测到课程有余量：${courses.map(c => `${c.name}(${c.quota})`).join(', \r\n')}`);
+        const res = await sendEmail(courses);
+        if (res) {
+          log('邮件发送成功！');
+          break; // 检测到余量并发送邮件后停止
+        }
+      }
+    } catch (error) {
+      log('检测失败：' + error, 'error');
+    }
+
+    // 生成下次查询的随机间隔
+    const nextInterval = Math.floor(Math.random() * (maxInterval - minInterval + 1)) + minInterval;
+    log(`下次查询将在 ${nextInterval / 1000} 秒后进行...`);
+    await new Promise(resolve => setTimeout(resolve, nextInterval));
+  }
+}
+
+// 替换原来的 run() 调用
+runRandomInterval();
