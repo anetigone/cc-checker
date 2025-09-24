@@ -9,7 +9,7 @@ const config = {
   // 课程接口配置（需替换为实际选课系统的接口地址和参数）
   courseApi: process.env.COURSE_API || 'http://zhjw.scu.edu.cn/student/courseSelect/freeCourse/courseList', // 你的选课接口
   courseNames: (process.env.COURSE_NAMES ? process.env.COURSE_NAMES.split(',') : ['计算机网络']), // 多个课程名，逗号分隔
-  cookie: process.env.COOKIE || 'student.urpSoft.cn=aaaZ8dPHwO1Bhggo0bVLz', // 你的 Cookie（可选）
+  cookie: process.env.COOKIE || 'student.urpSoft.cn=aaaDGpRcTOFfqejb3-UL', // 你的 Cookie（可选）
 
   // 邮箱配置（推荐用 QQ 邮箱，需开启 SMTP 并获取授权码）
   email: {
@@ -50,7 +50,7 @@ class Course {
 
 function log(msg: string, type: 'info' | 'error' = 'info') {
   const time = new Date().toISOString();
-  const line = `[${time}] ${type === 'error' ? '[ERROR]' : ''} ${msg}\n`;
+  const line = `[${time}] ${type === 'error' ? '[ERROR]' : '[INFO]'} ${msg}\n`;
   fs.appendFileSync('log.txt', line, { encoding: 'utf-8' });
   if (type === 'error') {
     console.error(msg);
@@ -60,10 +60,9 @@ function log(msg: string, type: 'info' | 'error' = 'info') {
 }
 
 async function fetchCoursesMulti(courseNames: string[]) {
-  let allCourses: Course[] = [];
-  for (const name of courseNames) {
+  const promises = courseNames.map(async (name) => {
     try {
-      log(`开始请求课程数据: ${name}`);
+      log(`正在查询课程：${name} ...`);
       const payload = new URLSearchParams({
         kkxsh: '',
         kch: '',
@@ -76,21 +75,25 @@ async function fetchCoursesMulti(courseNames: string[]) {
         fj: '0'
       }).toString();
       const response = await axios.post(config.courseApi, payload, { headers });
+
       const data = response.data;
-      if (!data || !data.rwRxkZlList) {
-        log(`接口返回数据格式异常: ${name}`, 'error');
-        continue;
+      if(!data || !data.rwRxkZlList) {
+        log(`接口返回数据异常，可能是 Cookie 失效了！`, 'error');
+        return [];
       }
-      log(`请求成功，开始处理数据: ${name}`);
+
       const list = data.rwRxkZlList || [];
       const courses: Course[] = list.map((item: any) => new Course(item.kcm, item.bkskyl, item.skjs))
         .filter((course: Course) => course.quota > 0);
-      allCourses = allCourses.concat(courses);
+      return courses;
     } catch (error) {
       log(`请求失败: ${name} - ` + error, 'error');
+      return [];
     }
-  }
-  return allCourses;
+  })
+
+  const results = await Promise.all(promises);
+  return results.flat();
 }
 
 async function sendEmail(courses: Course[]) {
